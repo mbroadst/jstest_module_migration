@@ -1,16 +1,26 @@
 function isIIFEExpression(node) {
 	return node.expression && node.expression.type === 'CallExpression' &&
-	    node.expression.callee.type === 'FunctionExpression';
+		node.expression.callee.type === 'FunctionExpression';
 }
 
 function isUseStrictExpression(node) {
 	return (
-	    node.type === 'ExpressionStatement' && node.expression &&
-	    node.expression.value === 'use strict');
+		node.type === 'ExpressionStatement' && node.expression &&
+		node.expression.value === 'use strict');
 }
 
-module.exports = function transformer(file, {jscodeshift: j} /*, options */) {
+module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
 	const source = j(file.source);
+
+	// If there are multiple top-level IIFEs in this file, skip it
+	const topLevelIIFECount =
+		source.find(j.ExpressionStatement, isIIFEExpression)
+			.filter(expr => expr.scope.isGlobal)
+			.length;
+
+	if (topLevelIIFECount > 1) {
+		return source.toSource();
+	}
 
 	let rootIIFEUnwrapped = false;
 	let leadingComments;
@@ -28,21 +38,21 @@ module.exports = function transformer(file, {jscodeshift: j} /*, options */) {
 			}
 
 			j(expr).replaceWith(
-			    expr.node.expression.callee.body.body);
+				expr.node.expression.callee.body.body);
 			rootIIFEUnwrapped = true;
 		}
 	});
 
 	// Remove "use strict"
 	source.find(j.ExpressionStatement, isUseStrictExpression)
-	    .forEach(stmt => j(stmt).remove());
+		.forEach(stmt => j(stmt).remove());
 
 	// Any code that once "return"ed from the IIFE now needs to "quit()"
 	source.find(j.ReturnStatement).forEach(path => {
 		if (path.scope.isGlobal) {
 			return j(path).replaceWith(
-			    () => j.expressionStatement(
-				j.callExpression(j.identifier('quit'), [])));
+				() => j.expressionStatement(
+					j.callExpression(j.identifier('quit'), [])));
 		}
 	});
 
