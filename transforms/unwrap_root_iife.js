@@ -12,16 +12,24 @@ function isUseStrictExpression(node) {
 module.exports = function transformer(file, {jscodeshift: j} /*, options */) {
 	const source = j(file.source);
 
-	// Save the comments attached to the first node, if they exist
-	const getFirstNode = () => source.find(j.Program).get('body', 0).node;
-	const firstNode = getFirstNode();
-	const {comments} = firstNode;
+	let rootIIFEUnwrapped = false;
+	let leadingComments;
 
 	// Unwrap the root IIFE if it exists
 	source.find(j.ExpressionStatement, isIIFEExpression).forEach(expr => {
+		if (rootIIFEUnwrapped) {
+			return;
+		}
+
 		if (expr.scope.isGlobal) {
+			// Preserve leading comments when removing top-level IIFE
+			if (expr.value.leadingComments) {
+				leadingComments = expr.value.leadingComments;
+			}
+
 			j(expr).replaceWith(
 			    expr.node.expression.callee.body.body);
+			rootIIFEUnwrapped = true;
 		}
 	});
 
@@ -33,15 +41,18 @@ module.exports = function transformer(file, {jscodeshift: j} /*, options */) {
 	source.find(j.ReturnStatement).forEach(path => {
 		if (path.scope.isGlobal) {
 			return j(path).replaceWith(
-			    path => j.expressionStatement(
+			    () => j.expressionStatement(
 				j.callExpression(j.identifier('quit'), [])));
 		}
 	});
 
-	// If the first node has been modified or deleted, reattach the comments
-	const firstNodeAfterRewrite = getFirstNode();
-	if (firstNodeAfterRewrite !== firstNode) {
-		firstNodeAfterRewrite.comments = comments;
+	if (leadingComments) {
+		const comments = source.get().node.comments;
+		if (comments && Array.isArray(comments)) {
+			comments.push(...leadingComments);
+		} else {
+			source.get().node.comments = leadingComments;
+		}
 	}
 
 	return source.toSource();
