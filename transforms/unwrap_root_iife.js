@@ -34,7 +34,11 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
 		if (expr.scope.isGlobal) {
 			// Preserve leading comments when removing top-level IIFE
 			if (expr.value.leadingComments) {
-				leadingComments = expr.value.leadingComments;
+				const lastComment =
+					expr.value.leadingComments[expr.value.leadingComments.length - 1];
+				if (lastComment.leading) {
+					leadingComments = expr.value.leadingComments;
+				}
 			}
 
 			j(expr).replaceWith(
