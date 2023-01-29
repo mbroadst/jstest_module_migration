@@ -14,30 +14,6 @@ function replaceWithExported(j, path) {
     return exportDeclaration;
 }
 
-// function collectGlobalIdentifiers(j, source) {
-//     const result = [];
-//     source
-//         .find(j.Node)
-//         .filter(isGlobalNode)
-//         .forEach(p => {
-//             const node = p.value;
-//             if (node.type === 'ExpressionStatement') {
-//                 const expr = node.expression;
-//                 if (expr.type === 'AssignmentExpression') {
-//                     if (expr.left.type === 'Identifier') {
-//                         result.push(expr.left.name);
-//                     }
-//                 }
-//             } else if (node.type === 'ClassDeclaration' || node.type === 'FunctionDeclaration') {
-//                 result.push(node.id.name);
-//             } else if (node.type === 'VariableDeclaration') {
-//                 result.push(node.declarations[0].id.name);
-//             }
-//         });
-
-//     return result;
-// }
-
 function isClassExpression(path) {
     // match: ClassName = function() {}
     const node = path.value;
@@ -47,9 +23,6 @@ function isClassExpression(path) {
 
 module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
     const source = j(file.source);
-
-    // const globalIdentifiers = collectGlobalIdentifiers(j, source);
-    // console.dir({ globalIdentifiers });
 
     // functions
     source
@@ -84,6 +57,5 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
             return j.exportNamedDeclaration(varDecl);
         });
 
-    console.dir(source.toSource());
     return source.toSource();
 }
