@@ -47,6 +47,10 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
 		}
 	});
 
+	if (!rootIIFEUnwrapped) {
+		return source.toSource();
+	}
+
 	// Remove "use strict"
 	source.find(j.ExpressionStatement, isUseStrictExpression)
 		.forEach(stmt => j(stmt).remove());
