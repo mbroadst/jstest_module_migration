@@ -2,7 +2,7 @@ const path = require('path');
 const { readFileSync } = require('fs');
 
 function isLoadCallExpression(path) {
-    const expr = path.value;
+    const expr = path.value.expression;
     return expr.callee && expr.callee.name && expr.callee.name === 'load';
 }
 
@@ -11,10 +11,8 @@ function isExported(path) {
     return node.type === 'ExportNamedDeclaration';
 }
 
-function getExportedIdentifiers(j, file, scriptPath) {
-    const p = path.parse(file.path);
-    const path2 = path.resolve(p.dir, scriptPath);
-    const source = readFileSync(path2).toString();
+function getExportedIdentifiers(j, basePath, loadPath) {
+    const source = readFileSync(path.resolve(basePath, loadPath)).toString();
 
     const result = [];
     j(source)
@@ -39,27 +37,47 @@ function findExportsUsedInThisScript(j, file, exported) {
     })
 }
 
+function findBasePath(loadPath) {
+    if (path.basename(loadPath) === 'jstests') {
+        return path.resolve(path.dirname(loadPath));
+    }
+
+    return findBasePath(path.dirname(loadPath));
+}
+
+
 module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
     const source = j(file.source);
+    const basePath = findBasePath(file.path);
 
     // Find all "load" calls and replace with import declarations
     source
-        .find(j.CallExpression)
+        .find(j.ExpressionStatement)
         .filter(isLoadCallExpression)
-        .replaceWith(expr => {
-            const scriptPath = expr.value.arguments[0].value;
-            const exported = getExportedIdentifiers(j, file, scriptPath);
+        .replaceWith(stmt => {
+            const node = stmt.value;
+            const loadSpecifier = node.expression.arguments[0].value;
+            const exported = getExportedIdentifiers(j, basePath, loadSpecifier);
             if (exported.length === 0) {
-                return expr;
+                return node;
             }
 
             const imported = findExportsUsedInThisScript(j, file, exported);
             if (imported.length === 0) {
-                return expr;
+                // We probably need to delete this line, its not importing anything?
+                console.error("REMOVED ELEMENT: ", node);
+                return null;
+            }
+
+            // If we only have one export, then import using a namespace specifier
+            // replace with: import * as NAME from '...'; with name of exported
+            if (exported.length === 1) {
+                const namespaceSpecifier = j.importNamespaceSpecifier(j.identifier(exported[0]));
+                return j.importDeclaration([namespaceSpecifier], j.literal(loadSpecifier));
             }
 
             const specifiers = imported.map(name => j.importSpecifier(j.identifier(name)));
-            return j.importDeclaration(specifiers, j.literal(scriptPath));
+            return j.importDeclaration(specifiers, j.literal(loadSpecifier));
         });
 
     console.dir(source.toSource());
