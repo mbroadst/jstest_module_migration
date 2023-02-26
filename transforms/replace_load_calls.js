@@ -21,7 +21,15 @@ function getExportedIdentifiers(j, basePath, loadPath) {
         .forEach(p => {
             const decl = p.value.declaration;
             if (decl.type === 'VariableDeclaration') {
-                result.push(decl.declarations[0].id.name);
+                const varDecl = decl.declarations[0];
+                if (varDecl.id.type === 'ObjectPattern') {
+                    const objectPattern = varDecl.id;
+                    objectPattern.properties.forEach(prop => {
+                        result.push(prop.key.name);
+                    });
+                } else {
+                    result.push(varDecl.id.name);
+                }
             } else {
                 result.push(decl.id.name);
             }
@@ -45,6 +53,57 @@ function findBasePath(loadPath) {
     return findBasePath(path.dirname(loadPath));
 }
 
+function isInGlobalScope(node) {
+    return node.scope.isGlobal;
+}
+
+function makeImportAllAsSpecifier(j, stmt, importSpecifier, loadSpecifier) {
+    if (!isInGlobalScope(stmt)) {
+        return stmt;
+    }
+
+    // import * as NAME from '...';
+    return j.importDeclaration([
+        j.importNamespaceSpecifier(j.identifier(importSpecifier))
+    ], j.literal(loadSpecifier));
+
+    // const NAME = await import(...);
+    // return j.variableDeclaration("const", [
+    //     j.variableDeclarator(
+    //         j.identifier(importSpecifier),
+    //         j.awaitExpression(
+    //             j.callExpression(b.identifier("import"), [j.literal(loadSpecifier)])
+    //         )
+    //     )
+    // ]);
+}
+
+function makeImportSome(j, stmt, importedSpecifiers, loadSpecifier) {
+    if (!isInGlobalScope(stmt)) {
+        return stmt;
+    }
+
+    const specifiers = importedSpecifiers.map(name => j.importSpecifier(j.identifier(name)));
+    return j.importDeclaration(specifiers, j.literal(loadSpecifier));
+
+    // const {some...} = await import(...);
+    // const objectPattern = j.objectPattern(
+    //     importedSpecifiers.map(specifier => {
+    //         const property = j.property("init", j.identifier(specifier), j.identifier(specifier));
+    //         property.shorthand = true;
+    //         return property;
+    //     })
+    // );
+
+    // return j.variableDeclaration("const", [
+    //     j.variableDeclarator(
+    //         objectPattern,
+    //         j.awaitExpression(
+    //             j.callExpression(j.identifier("import"), [j.literal(loadSpecifier)])
+    //         )
+    //     )
+    // ]);
+}
 
 module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
     const source = j(file.source);
@@ -56,30 +115,57 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
         .filter(isLoadCallExpression)
         .replaceWith(stmt => {
             const node = stmt.value;
-            const loadSpecifier = node.expression.arguments[0].value;
+            const loadSpecifierArg = node.expression.arguments[0];
+            if (loadSpecifierArg.type !== 'Literal') {
+                return node;
+            }
+
+            const loadSpecifier = loadSpecifierArg.value;
             const exported = getExportedIdentifiers(j, basePath, loadSpecifier);
             if (exported.length === 0) {
                 return node;
             }
 
+            // Preserve leading comments when replacing nodes
+            let leadingComments;
+            if (node.leadingComments) {
+                const lastComment =
+                    node.leadingComments[node.leadingComments.length - 1];
+                if (lastComment.leading) {
+                    leadingComments = node.leadingComments;
+                }
+            }
+
             const imported = findExportsUsedInThisScript(j, file, exported);
             if (imported.length === 0) {
-                // We probably need to delete this line, its not importing anything?
-                console.error("REMOVED ELEMENT: ", node);
+                // We've detected an import which isn't used, remove it.
+
+                // Re-add any leading comments before removing the node
+                if (leadingComments) {
+                    const comments = source.get().node.comments;
+                    if (comments && Array.isArray(comments)) {
+                        comments.push(...leadingComments);
+                    } else {
+                        source.get().node.comments = leadingComments;
+                    }
+                }
+
                 return null;
             }
 
             // If we only have one export, then import using a namespace specifier
             // replace with: import * as NAME from '...'; with name of exported
-            if (exported.length === 1) {
-                const namespaceSpecifier = j.importNamespaceSpecifier(j.identifier(exported[0]));
-                return j.importDeclaration([namespaceSpecifier], j.literal(loadSpecifier));
+            const decl = (exported.length === 1) ?
+                makeImportAllAsSpecifier(j, stmt, exported[0], loadSpecifier) :
+                makeImportSome(j, stmt, imported, loadSpecifier);
+
+            if (leadingComments) {
+                decl.comments = leadingComments;
             }
 
-            const specifiers = imported.map(name => j.importSpecifier(j.identifier(name)));
-            return j.importDeclaration(specifiers, j.literal(loadSpecifier));
+            return decl;
         });
 
-    console.dir(source.toSource());
+    // console.dir(source.toSource());
     return source.toSource();
 }
