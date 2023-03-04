@@ -3,7 +3,21 @@ const { readFileSync } = require('fs');
 
 function isLoadCallExpression(path) {
     const expr = path.value.expression;
-    return expr.callee && expr.callee.name && expr.callee.name === 'load';
+    const isLoadExpr = expr.callee && expr.callee.name && expr.callee.name === 'load';
+
+    if (isLoadExpr) {
+        const args = expr.arguments;
+        // Only convert load calls which have a single literal string input
+        if (!args || args.length < 1 || args[0].type !== 'Literal') {
+            return false;
+        }
+
+        // And don't convert load calls which are loading overrides
+        const isLoadOverride = args[0].value.indexOf('override') !== -1;
+        return !isLoadOverride;
+    }
+
+    return false;
 }
 
 function isExported(path) {
@@ -58,10 +72,6 @@ function isInGlobalScope(node) {
 }
 
 function makeImportAllAsSpecifier(j, stmt, importSpecifier, loadSpecifier) {
-    if (!isInGlobalScope(stmt)) {
-        return stmt;
-    }
-
     // import * as NAME from '...';
     return j.importDeclaration([
         j.importNamespaceSpecifier(j.identifier(importSpecifier))
@@ -79,10 +89,6 @@ function makeImportAllAsSpecifier(j, stmt, importSpecifier, loadSpecifier) {
 }
 
 function makeImportSome(j, stmt, importedSpecifiers, loadSpecifier) {
-    if (!isInGlobalScope(stmt)) {
-        return stmt;
-    }
-
     const specifiers = importedSpecifiers.map(name => j.importSpecifier(j.identifier(name)));
     return j.importDeclaration(specifiers, j.literal(loadSpecifier));
 
@@ -105,9 +111,50 @@ function makeImportSome(j, stmt, importedSpecifiers, loadSpecifier) {
     // ]);
 }
 
+function isChildOfRootExport(j, stmt) {
+    // If we are in a block statement:
+    if (stmt.parentPath && Array.isArray(stmt.parentPath.value) &&
+        stmt.parentPath.parentPath && stmt.parentPath.parentPath.value.type === 'BlockStatement') {
+        const blockStmt = stmt.parentPath.parentPath;
+
+        if (
+            blockStmt.parentPath && blockStmt.parentPath.value.type === 'FunctionExpression') {
+            const fnExpr = blockStmt.parentPath;
+
+            // (function() {
+            //     load("jstests/replsets/rslib.js");
+            // })();
+            if (fnExpr.parentPath && fnExpr.parentPath.value.type === 'CallExpression' &&
+                isInGlobalScope(fnExpr.parentPath)) {
+                return true;
+            }
+
+            // export var test = function() {
+            //    load("jstests/libs/killed_session_util.js");
+            // }
+            if (fnExpr.parentPath && fnExpr.parentPath.value.type === 'VariableDeclarator' &&
+                fnExpr.parentPath.parentPath && fnExpr.parentPath.parentPath.name === 'declarations' &&
+                fnExpr.parentPath.parentPath.parentPath && fnExpr.parentPath.parentPath.parentPath.value.type === 'VariableDeclaration'
+            ) {
+                return isInGlobalScope(fnExpr.parentPath.parentPath.parentPath.parentPath);
+            }
+        }
+
+        // export function killSession(db, collName) {
+        //     load("jstests/libs/killed_session_util.js");
+        // }
+        if (blockStmt.parentPath && blockStmt.parentPath.value.type === 'FunctionDeclaration') {
+            return isInGlobalScope(blockStmt.parentPath.parentPath);
+        }
+    }
+
+    return false;
+}
+
 module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
     const source = j(file.source);
     const basePath = findBasePath(file.path);
+    const newTopLevelImports = [];
 
     // Find all "load" calls and replace with import declarations
     source
@@ -163,8 +210,25 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
                 decl.comments = leadingComments;
             }
 
+            if (isChildOfRootExport(j, stmt)) {
+                newTopLevelImports.push(decl);
+                return null;
+            } else {
+                if (!isInGlobalScope(stmt)) {
+                    // These are probably dynamic imports for parallel shell funcs
+                    console.log(`HAND_CONVERT: ${file.path}`);
+                }
+            }
+
             return decl;
         });
+
+    if (newTopLevelImports.length > 0) {
+        const body = source.get().node.program.body;
+        for (let tli of newTopLevelImports) {
+            body.unshift(tli);
+        }
+    }
 
     // console.dir(source.toSource());
     return source.toSource();
