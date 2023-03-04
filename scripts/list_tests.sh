@@ -12,7 +12,7 @@ grep -hro 'load('"'"'[^'"'"']*\|load("[^"]*' $SEARCH_PATH | cut -c 7- | sort | u
 # add well-known libs paths
 find $SEARCH_PATH -type d -name "*libs*" | sed -e "s|^$SEARCH_PATH|jstests|" >> $TMP_FILE
 cat <<EOT >> $TMP_FILE
-jstests/concurrency/fsm_libs
+fsm
 jstests/libs/override_methods
 jstests/third_party
 EOT
