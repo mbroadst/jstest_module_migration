@@ -12,12 +12,12 @@ grep -hro 'load('"'"'[^'"'"']*\|load("[^"]*' $SEARCH_PATH | cut -c 7- | sort | u
 # add well-known libs paths
 find $SEARCH_PATH -type d -name "*libs*" | sed -e "s|^$SEARCH_PATH|jstests|" >> $TMP_FILE
 cat <<EOT >> $TMP_FILE
-jstests/hooks
+jstests/concurrency/fsm_libs
 jstests/libs/override_methods
 jstests/third_party
 EOT
 
 # find all files with a "js" extension that do not appear in the list of `load`ed files
-find $SEARCH_PATH -type f -name "*.js" $(printf "! -path *%s* " $(cat $TMP_FILE)) | grep -vE "override|third_party|fsm_libs"
+find $SEARCH_PATH -type f -name "*.js" $(printf "! -path *%s* " $(cat $TMP_FILE))
 
 rm $TMP_FILE
