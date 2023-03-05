@@ -58,7 +58,11 @@ function findExportsUsedInThisScript(j, file, exported) {
     const source = j(file.source);
     recast.visit(source, {
         visitIdentifier: function (path) {
-            localIdentifiers.add(path.value.name);
+            const parentType = path.parentPath.value.type;
+            if (parentType !== 'Property') {
+                localIdentifiers.add(path.value.name);
+            }
+
             return true;
         }
     });
@@ -205,10 +209,9 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
         }
     }
 
-    console.dir(source.toSource());
+    // console.dir(source.toSource());
     return source.toSource();
 }
-
 
 /*
 JUNKYARD
