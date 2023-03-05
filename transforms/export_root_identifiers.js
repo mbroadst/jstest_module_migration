@@ -23,24 +23,34 @@ function isClassExpression(path) {
 
 module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
     const source = j(file.source);
+    let foundExports = false;
 
     // functions
     source
         .find(j.FunctionDeclaration)
         .filter(isGlobalNode)
-        .replaceWith(p => replaceWithExported(j, p));
+        .replaceWith(p => {
+            foundExports = true;
+            return replaceWithExported(j, p);
+        });
 
     // variables
     source
         .find(j.VariableDeclaration)
         .filter(isGlobalNode)
-        .replaceWith(p => replaceWithExported(j, p));
+        .replaceWith(p => {
+            foundExports = true;
+            return replaceWithExported(j, p);
+        });
 
     // classes
     source
         .find(j.ClassDeclaration)
         .filter(isGlobalNode)
-        .replaceWith(p => replaceWithExported(j, p));
+        .replaceWith(p => {
+            foundExports = true;
+            return replaceWithExported(j, p);
+        });
 
     // es5-style class expressions
     source
@@ -48,6 +58,8 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
         .filter(isGlobalNode)
         .filter(isClassExpression)
         .replaceWith(p => {
+            foundExports = true;
+
             // first convert expression to VariableDeclaration
             const expr = p.value.expression;
             const declarator = j.variableDeclarator(expr.left, expr.right);
@@ -56,6 +68,10 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
             // then export the VariableDeclaration
             return j.exportNamedDeclaration(varDecl);
         });
+
+    if (!foundExports) {
+        console.log(`MANUAL_CHECK: ${file.path}`);
+    }
 
     return source.toSource();
 }
