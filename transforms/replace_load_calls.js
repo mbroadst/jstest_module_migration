@@ -1,4 +1,5 @@
 const path = require('path');
+const recast = require('recast');
 const { readFileSync } = require('fs');
 
 function isLoadCallExpression(path) {
@@ -53,10 +54,16 @@ function getExportedIdentifiers(j, basePath, loadPath) {
 }
 
 function findExportsUsedInThisScript(j, file, exported) {
-    const source = file.source;
-    return exported.filter(identifier => {
-        return source.indexOf(identifier) !== -1;
-    })
+    const localIdentifiers = new Set();
+    const source = j(file.source);
+    recast.visit(source, {
+        visitIdentifier: function (path) {
+            localIdentifiers.add(path.value.name);
+            return true;
+        }
+    });
+
+    return exported.filter(identifier => localIdentifiers.has(identifier));
 }
 
 function findBasePath(loadPath) {
@@ -71,46 +78,6 @@ function isInGlobalScope(node) {
     return node.scope.isGlobal;
 }
 
-function makeImportAllAsSpecifier(j, stmt, importSpecifier, loadSpecifier) {
-    // import * as NAME from '...';
-    return j.importDeclaration([
-        j.importNamespaceSpecifier(j.identifier(importSpecifier))
-    ], j.literal(loadSpecifier));
-
-    // const NAME = await import(...);
-    // return j.variableDeclaration("const", [
-    //     j.variableDeclarator(
-    //         j.identifier(importSpecifier),
-    //         j.awaitExpression(
-    //             j.callExpression(b.identifier("import"), [j.literal(loadSpecifier)])
-    //         )
-    //     )
-    // ]);
-}
-
-function makeImportSome(j, stmt, importedSpecifiers, loadSpecifier) {
-    const specifiers = importedSpecifiers.map(name => j.importSpecifier(j.identifier(name)));
-    return j.importDeclaration(specifiers, j.literal(loadSpecifier));
-
-    // const {some...} = await import(...);
-    // const objectPattern = j.objectPattern(
-    //     importedSpecifiers.map(specifier => {
-    //         const property = j.property("init", j.identifier(specifier), j.identifier(specifier));
-    //         property.shorthand = true;
-    //         return property;
-    //     })
-    // );
-
-    // return j.variableDeclaration("const", [
-    //     j.variableDeclarator(
-    //         objectPattern,
-    //         j.awaitExpression(
-    //             j.callExpression(j.identifier("import"), [j.literal(loadSpecifier)])
-    //         )
-    //     )
-    // ]);
-}
-
 function isChildOfRootExport(j, stmt) {
     // If we are in a block statement:
     if (stmt.parentPath && Array.isArray(stmt.parentPath.value) &&
@@ -118,7 +85,10 @@ function isChildOfRootExport(j, stmt) {
         const blockStmt = stmt.parentPath.parentPath;
 
         if (
-            blockStmt.parentPath && blockStmt.parentPath.value.type === 'FunctionExpression') {
+            blockStmt.parentPath && (
+                blockStmt.parentPath.value.type === 'FunctionExpression' ||
+                blockStmt.parentPath.value.type === 'ArrowFunctionExpression'
+            )) {
             const fnExpr = blockStmt.parentPath;
 
             // (function() {
@@ -138,6 +108,12 @@ function isChildOfRootExport(j, stmt) {
             ) {
                 return isInGlobalScope(fnExpr.parentPath.parentPath.parentPath.parentPath);
             }
+
+            //
+            // export var test = (() => {
+            //   load("jstests/libs/fail_point_util.js");
+            // })();
+            // TODO(mbroadst)
         }
 
         // export function killSession(db, collName) {
@@ -200,12 +176,9 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
                 return null;
             }
 
-            // If we only have one export, then import using a namespace specifier
-            // replace with: import * as NAME from '...'; with name of exported
-            const decl = (exported.length === 1) ?
-                makeImportAllAsSpecifier(j, stmt, exported[0], loadSpecifier) :
-                makeImportSome(j, stmt, imported, loadSpecifier);
-
+            const specifiers =
+                imported.map(name => j.importSpecifier(j.identifier(name)));
+            const decl = j.importDeclaration(specifiers, j.literal(loadSpecifier));
             if (leadingComments) {
                 decl.comments = leadingComments;
             }
@@ -225,11 +198,57 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
 
     if (newTopLevelImports.length > 0) {
         const body = source.get().node.program.body;
+        // TODO(mbroadst): consider finding "use strict" and adding after that
+
         for (let tli of newTopLevelImports) {
             body.unshift(tli);
         }
     }
 
-    // console.dir(source.toSource());
+    console.dir(source.toSource());
     return source.toSource();
 }
+
+
+/*
+JUNKYARD
+function makeImportAllAsSpecifier(j, stmt, importSpecifier, loadSpecifier) {
+    // import * as NAME from '...';
+    return j.importDeclaration([
+        j.importNamespaceSpecifier(j.identifier(importSpecifier))
+    ], j.literal(loadSpecifier));
+
+    // const NAME = await import(...);
+    // return j.variableDeclaration("const", [
+    //     j.variableDeclarator(
+    //         j.identifier(importSpecifier),
+    //         j.awaitExpression(
+    //             j.callExpression(b.identifier("import"), [j.literal(loadSpecifier)])
+    //         )
+    //     )
+    // ]);
+}
+
+function makeImportSome(j, stmt, importedSpecifiers, loadSpecifier) {
+    const specifiers = importedSpecifiers.map(name => j.importSpecifier(j.identifier(name)));
+    return j.importDeclaration(specifiers, j.literal(loadSpecifier));
+
+    // const {some...} = await import(...);
+    // const objectPattern = j.objectPattern(
+    //     importedSpecifiers.map(specifier => {
+    //         const property = j.property("init", j.identifier(specifier), j.identifier(specifier));
+    //         property.shorthand = true;
+    //         return property;
+    //     })
+    // );
+
+    // return j.variableDeclaration("const", [
+    //     j.variableDeclarator(
+    //         objectPattern,
+    //         j.awaitExpression(
+    //             j.callExpression(j.identifier("import"), [j.literal(loadSpecifier)])
+    //         )
+    //     )
+    // ]);
+}
+*/
