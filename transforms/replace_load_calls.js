@@ -6,9 +6,11 @@ const { readFileSync } = require('fs');
 const ETC_OVERRIDES = new Set([
     'jstests/multiVersion/libs/multi_rs.js',
     'jstests/multiVersion/libs/multi_cluster.js',
-    'jstests/multiVersion/libs/verify_versions.js'
-]);
+    'jstests/multiVersion/libs/verify_versions.js',
 
+    // enterprise stuff
+    'src/mongo/db/modules/enterprise/jstests/hot_backups/backup_restore_backup_cursor.js'
+]);
 
 function isLoadForOverride(importSpecifier) {
     if (importSpecifier.indexOf('override') !== -1) {
@@ -85,14 +87,14 @@ function findExportsUsedInThisScript(j, file, exported) {
     recast.visit(source, {
         visitIdentifier: function (path) {
             const parentType = path.parentPath.value.type;
-            if (excludeIdentifierTypes.has(parentType)) {
+            if (parentType === 'FunctionDeclaration' || (parentType === 'VariableDeclarator' && path.name === 'id')) {
+                // One of:
+                //   - function possibleImport() {}
+                //   - var possibleImport = ...
                 excludeIdentifiers.add(path.value.name);
-            } else if (parentType === 'MemberExpression' && path.name === 'property') {
-                excludeIdentifiers.add(path.value.name);
-            } else if (parentType === 'VariableDeclarator' && path.name === 'id') {
-                excludeIdentifiers.add(path.value.name);
-            } else if (parentType === 'Property') {
-                excludeIdentifiers.add(path.value.name);
+            } else if (parentType === 'Property' ||
+                (parentType === 'MemberExpression' && path.name === 'property')) {
+                // Don't do anything here, this isn't a hint for what we should do with the import.
             } else {
                 localIdentifiers.add(path.value.name);
             }
@@ -169,6 +171,8 @@ function isChildOfRootExport(j, stmt) {
 module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
     const source = j(file.source);
     const basePath = findBasePath(file.path);
+    // console.dir({filePath: file.path, basePath});
+
     const newTopLevelImports = [];
 
     // Find all "load" calls and replace with import declarations
