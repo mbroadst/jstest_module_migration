@@ -2,6 +2,28 @@ const path = require('path');
 const recast = require('recast');
 const { readFileSync } = require('fs');
 
+// These are "libs" which actually extend behavior, and thus should probably be marked "override"
+const ETC_OVERRIDES = new Set([
+    'jstests/multiVersion/libs/multi_rs.js',
+    'jstests/multiVersion/libs/multi_cluster.js',
+    'jstests/multiVersion/libs/verify_versions.js'
+]);
+
+
+function isLoadForOverride(importSpecifier) {
+    if (importSpecifier.indexOf('override') !== -1) {
+        return true;
+    }
+
+    for (let override of ETC_OVERRIDES) {
+        if (importSpecifier.indexOf(override) !== -1) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function isLoadCallExpression(path) {
     const expr = path.value.expression;
     const isLoadExpr = expr.callee && expr.callee.name && expr.callee.name === 'load';
@@ -14,8 +36,7 @@ function isLoadCallExpression(path) {
         }
 
         // And don't convert load calls which are loading overrides
-        const isLoadOverride = args[0].value.indexOf('override') !== -1;
-        return !isLoadOverride;
+        return !isLoadForOverride(args[0].value);
     }
 
     return false;
@@ -36,15 +57,16 @@ function getExportedIdentifiers(j, basePath, loadPath) {
         .forEach(p => {
             const decl = p.value.declaration;
             if (decl.type === 'VariableDeclaration') {
-                const varDecl = decl.declarations[0];
-                if (varDecl.id.type === 'ObjectPattern') {
-                    const objectPattern = varDecl.id;
-                    objectPattern.properties.forEach(prop => {
-                        result.push(prop.key.name);
-                    });
-                } else {
-                    result.push(varDecl.id.name);
-                }
+                decl.declarations.forEach(varDecl => {
+                    if (varDecl.id.type === 'ObjectPattern') {
+                        const objectPattern = varDecl.id;
+                        objectPattern.properties.forEach(prop => {
+                            result.push(prop.key.name);
+                        });
+                    } else {
+                        result.push(varDecl.id.name);
+                    }
+                });
             } else {
                 result.push(decl.id.name);
             }
@@ -54,12 +76,24 @@ function getExportedIdentifiers(j, basePath, loadPath) {
 }
 
 function findExportsUsedInThisScript(j, file, exported) {
+    const excludeIdentifierTypes =
+        new Set(['FunctionDeclaration']);
+    const excludeIdentifiers = new Set();
     const localIdentifiers = new Set();
+
     const source = j(file.source);
     recast.visit(source, {
         visitIdentifier: function (path) {
             const parentType = path.parentPath.value.type;
-            if (parentType !== 'Property') {
+            if (excludeIdentifierTypes.has(parentType)) {
+                excludeIdentifiers.add(path.value.name);
+            } else if (parentType === 'MemberExpression' && path.name === 'property') {
+                excludeIdentifiers.add(path.value.name);
+            } else if (parentType === 'VariableDeclarator' && path.name === 'id') {
+                excludeIdentifiers.add(path.value.name);
+            } else if (parentType === 'Property') {
+                excludeIdentifiers.add(path.value.name);
+            } else {
                 localIdentifiers.add(path.value.name);
             }
 
@@ -67,7 +101,8 @@ function findExportsUsedInThisScript(j, file, exported) {
         }
     });
 
-    return exported.filter(identifier => localIdentifiers.has(identifier));
+    return exported.filter(identifier =>
+        !excludeIdentifiers.has(identifier) && localIdentifiers.has(identifier));
 }
 
 function findBasePath(loadPath) {
