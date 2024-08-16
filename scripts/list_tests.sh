@@ -13,7 +13,6 @@ grep -hro 'load('"'"'[^'"'"']*\|load("[^"]*' $SEARCH_PATH | cut -c 7- | sort | u
 find $SEARCH_PATH -type d -name "*libs*" | sed -e "s|^$SEARCH_PATH|jstests|" >> $TMP_FILE
 cat <<EOT >> $TMP_FILE
 fsm
-jstests/libs/override_methods
 jstests/third_party
 EOT
 

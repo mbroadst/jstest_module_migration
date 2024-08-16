@@ -37,8 +37,12 @@ function isLoadCallExpression(path) {
             return false;
         }
 
-        // And don't convert load calls which are loading overrides
-        return !isLoadForOverride(args[0].value);
+        // target specific load calls
+        // if (!args[0].value.match(/two_phase_drops/)) {
+        //     return false;
+        // }
+
+        return true;
     }
 
     return false;
@@ -50,6 +54,10 @@ function isExported(path) {
 }
 
 function getExportedIdentifiers(j, basePath, loadPath) {
+    if (basePath.endsWith('src/mongo/db/modules/enterprise')) {
+        basePath = basePath.replace('src/mongo/db/modules/enterprise', '');
+    }
+
     const source = readFileSync(path.resolve(basePath, loadPath)).toString();
 
     const result = [];
@@ -78,8 +86,6 @@ function getExportedIdentifiers(j, basePath, loadPath) {
 }
 
 function findExportsUsedInThisScript(j, file, exported) {
-    const excludeIdentifierTypes =
-        new Set(['FunctionDeclaration']);
     const excludeIdentifiers = new Set();
     const localIdentifiers = new Set();
 
@@ -150,11 +156,10 @@ function isChildOfRootExport(j, stmt) {
                 return isInGlobalScope(fnExpr.parentPath.parentPath.parentPath.parentPath);
             }
 
-            //
+            // TODO(mbroadst)
             // export var test = (() => {
             //   load("jstests/libs/fail_point_util.js");
             // })();
-            // TODO(mbroadst)
         }
 
         // export function killSession(db, collName) {
@@ -166,6 +171,30 @@ function isChildOfRootExport(j, stmt) {
     }
 
     return false;
+}
+
+function convertToDynamicImport(j, stmt, imported) {
+    const node = stmt.value;
+
+    // maybe we should delete, or maybe its being used for side-effects
+    if (imported < 1) {
+        console.log(`HAND_CONVERT: ${file.path}`);
+        return node;
+    }
+
+    if (imported.size === 1) {
+    } else {
+    // return j.variableDeclaration("const", [
+    //     j.variableDeclarator(
+    //         j.identifier(importSpecifier),
+    //         j.awaitExpression(
+    //             j.callExpression(b.identifier("import"), [j.literal(loadSpecifier)])
+    //         )
+    //     )
+    // ]);
+    }
+
+    return node;
 }
 
 module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
@@ -187,6 +216,11 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
             }
 
             const loadSpecifier = loadSpecifierArg.value;
+            if (isLoadForOverride(loadSpecifier)) {
+                // Assume by default we want to import for side-effects
+                return j.importDeclaration([], j.literal(loadSpecifier));
+            }
+
             const exported = getExportedIdentifiers(j, basePath, loadSpecifier);
             if (exported.length === 0) {
                 return node;
@@ -204,9 +238,8 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
 
             const imported = findExportsUsedInThisScript(j, file, exported);
             if (imported.length === 0) {
-                // We've detected an import which isn't used, remove it.
-
-                // Re-add any leading comments before removing the node
+                // We've detected an import which isn't used, remove it. But first, re-add any
+                // leading comments before removing the node
                 if (leadingComments) {
                     const comments = source.get().node.comments;
                     if (comments && Array.isArray(comments)) {
@@ -232,7 +265,7 @@ module.exports = function transformer(file, { jscodeshift: j } /*, options */) {
             } else {
                 if (!isInGlobalScope(stmt)) {
                     // These are probably dynamic imports for parallel shell funcs
-                    console.log(`HAND_CONVERT: ${file.path}`);
+                    return convertToDynamicImport(j, stmt, imported);
                 }
             }
 
